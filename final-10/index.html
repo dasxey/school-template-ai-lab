@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <title>Pose Trainer</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-image: url('your-background.jpg'); /* Замени на свой файл */
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            user-select: none;
+        }
+        h1 {
+            margin-bottom: 20px;
+            color: #070707;
+            text-align: center;
+        }
+        #main-container {
+            display: flex;
+            gap: 30px;
+            align-items: flex-start;
+            max-width: 900px;
+            width: 100%;
+        }
+        #video-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #target-img {
+            width: 300px;
+            margin-bottom: 20px;
+            display: none;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+        }
+        #canvas {
+            border: 1px solid #ffcdff;
+            border-radius: 8px;
+            background-color: white;
+        }
+        #info-section {
+            flex: 1;
+            font-size: 18px;
+            color: #333;
+            min-width: 200px;
+            user-select: none;
+        }
+        #result {
+            font-size: 22px;
+            margin-top: 15px;
+            color: rgb(1, 94, 1);
+            min-height: 28px;
+        }
+        #percentage {
+            font-weight: bold;
+            font-size: 20px;
+            margin-top: 10px;
+        }
+        button {
+            padding: 10px 25px;
+            font-size: 18px;
+            margin-top: 20px;
+            cursor: pointer;
+            border: none;
+            background-color: #28a745;
+            color: white;
+            border-radius: 6px;
+            transition: background-color 0.3s ease;
+            user-select: none;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Інтелектуальний додаток-наставник для йоги та фітнесу</h1>
+
+    <div id="main-container">
+        <div id="video-section">
+            <img id="target-img" src="" alt="Поза" />
+            <canvas id="canvas" width="300" height="300"></canvas>
+        </div>
+
+        <div id="info-section">
+            <button id="start-btn">Почати</button>
+            <div id="status"></div>
+            <div id="percentage"></div>
+        </div>
+    </div>
+
+    <!-- TensorFlow и Teachable Machine -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
+    <script>
+        const URL = "./model/";
+        let model, webcam, ctx;
+        let maxPredictions;
+
+        const poses = ["баланс", "зірочка", "присяд"];
+        let currentPoseIndex = 0;
+        const holdTime = 1000; // 1 секунда удержания позы
+        let holdStartTime = null;
+
+        const targetImg = document.getElementById("target-img");
+        const canvas = document.getElementById("canvas");
+        ctx = canvas.getContext("2d");
+        const statusDiv = document.getElementById("status");
+        const percentageDiv = document.getElementById("percentage");
+        const startBtn = document.getElementById("start-btn");
+
+        // Изначально скрываем canvas и target image
+        canvas.style.display = "none";
+        targetImg.style.display = "none";
+
+        startBtn.onclick = () => startTraining();
+
+        async function startTraining() {
+            startBtn.style.display = "none";
+            currentPoseIndex = 0;
+            holdStartTime = null;
+            statusDiv.innerText = "";
+            percentageDiv.innerText = "";
+
+            // Показываем canvas и картинку целевой позы
+            canvas.style.display = "block";
+            targetImg.style.display = "block";
+
+            await loadModelAndSetup();
+            updateTargetImage();
+            window.requestAnimationFrame(loop);
+        }
+
+        async function loadModelAndSetup() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmPose.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            const size = 300;
+            const flip = true;
+            webcam = new tmPose.Webcam(size, size, flip);
+            await webcam.setup();
+            await webcam.play();
+        }
+
+        function updateTargetImage() {
+            if (currentPoseIndex < poses.length) {
+                targetImg.src = `pose${currentPoseIndex + 1}.jpg`;
+            }
+        }
+
+        async function loop() {
+            webcam.update();
+            await predict();
+            if (currentPoseIndex < poses.length) {
+                window.requestAnimationFrame(loop);
+            }
+        }
+
+        async function predict() {
+            const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+            const prediction = await model.predict(posenetOutput);
+
+            // Находим лучшую предсказанную позу
+            const best = prediction.reduce((a, b) => a.probability > b.probability ? a : b);
+            const predictedPose = best.className;
+            const confidence = best.probability;
+
+            // Показываем процент текущей целевой позы (или 0 если не совпало)
+            let currentConfidence = 0;
+            if (currentPoseIndex < poses.length && predictedPose === poses[currentPoseIndex]) {
+                currentConfidence = confidence;
+            }
+            percentageDiv.innerText = `Розпізнавання: ${(currentConfidence * 100).toFixed(0)}%`;
+
+            if (currentPoseIndex >= poses.length) {
+                // Все позы сделаны
+                finishTraining();
+                return;
+            }
+
+            if (predictedPose === poses[currentPoseIndex] && confidence > 0.6) {
+                if (!holdStartTime) {
+                    holdStartTime = Date.now();
+                    statusDiv.innerText = confidence > 0.9 ? "Правильно!" : "Почти получилось";
+                } else {
+                    const heldTime = Date.now() - holdStartTime;
+                    if (heldTime > holdTime) {
+                        currentPoseIndex++;
+                        holdStartTime = null;
+                        if (currentPoseIndex < poses.length) {
+                            updateTargetImage();
+                            statusDiv.innerText = "Правильно!";
+                        } else {
+                            finishTraining();
+                        }
+                    } else {
+                        statusDiv.innerText = confidence > 0.9 ? "Правильно!" : "Почти получилось";
+                    }
+                }
+            } else {
+                holdStartTime = null;
+                statusDiv.innerText = "";
+            }
+
+            drawPose(pose);
+        }
+
+        function drawPose(pose) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(webcam.canvas, 0, 0);
+            if (pose) {
+                const minConfidence = 0.5;
+                tmPose.drawKeypoints(pose.keypoints, minConfidence, ctx);
+                tmPose.drawSkeleton(pose.keypoints, minConfidence, ctx);
+            }
+        }
+
+        function finishTraining() {
+            statusDiv.innerText = "Молодец! Ти зробив усі пози!";
+            percentageDiv.innerText = "";
+            targetImg.style.display = "none";
+            canvas.style.display = "none";
+            webcam.stop();
+            startBtn.innerText = "Почати заново";
+            startBtn.style.display = "inline-block";
+        }
+    </script>
+</body>
+</html>
